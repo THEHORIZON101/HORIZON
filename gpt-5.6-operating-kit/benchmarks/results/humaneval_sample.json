@@ -1,0 +1,24 @@
+{
+  "benchmark": "OpenAI HumanEval public sample",
+  "model_surface": "GPT-5.6 Sol High in ChatGPT Work",
+  "run_date": "2026-07-12",
+  "tasks": [
+    {"task_id": "HumanEval/0", "assertions_passed": 4, "assertions_total": 4, "status": "passed"},
+    {"task_id": "HumanEval/1", "assertions_passed": 4, "assertions_total": 4, "status": "passed"},
+    {"task_id": "HumanEval/2", "assertions_passed": 4, "assertions_total": 4, "status": "passed"},
+    {"task_id": "HumanEval/3", "assertions_passed": 4, "assertions_total": 4, "status": "passed"},
+    {"task_id": "HumanEval/4", "assertions_passed": 4, "assertions_total": 4, "status": "passed"}
+  ],
+  "tasks_passed": 5,
+  "tasks_total": 5,
+  "assertions_passed": 20,
+  "assertions_total": 20,
+  "claim_boundary": "5/5 on this public executable sample; not a full HumanEval score",
+  "limitations": [
+    "single session",
+    "public benchmark contamination possible",
+    "tool-assisted execution",
+    "no independent repeated samples",
+    "no latency, token, cost, or pass@k measurement"
+  ]
+}
