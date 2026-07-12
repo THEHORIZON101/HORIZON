@@ -1,0 +1,4 @@
+interface:
+  display_name: "Benchmark Lab"
+  short_description: "Run honest empirical AI evaluations"
+  default_prompt: "Use $benchmark-lab to compare these model or prompt configurations with executable graders."
