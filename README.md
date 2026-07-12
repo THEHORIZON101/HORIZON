@@ -1,71 +1,20 @@
-# Theorem
+# GPT-5.6 Operating Kit
 
-Theorem is a static universal study workspace.
+This repository now contains the tested GPT-5.6 operating system for coding, research, writing, presentations, studying, games, data, documents, visual creation, and business work.
 
-**Core promise:** Upload anything you need to learn. Theorem builds the right study path.
+## Start here
 
-Theorem turns notes, homework, study guides, textbook sections, worksheets, and code into the best learning mode for the material.
+Open the complete kit:
 
-## Current Version
+- [Operating-kit overview](gpt-5.6-operating-kit/README.md)
+- [Tested operating manuscript](gpt-5.6-operating-kit/manuscript/GPT-5.6-COMPLETE-MANUSCRIPT.md)
+- [ChatGPT settings](gpt-5.6-operating-kit/settings/CHATGPT-SETUP.md)
+- [Subject configuration matrix](gpt-5.6-operating-kit/profiles/SUBJECT-MATRIX.md)
+- [Benchmark results](gpt-5.6-operating-kit/benchmarks/README.md)
 
-This version is fully static and GitHub Pages-compatible.
+## Verified results
 
-It uses:
+- HumanEval public sample: **5/5 tasks passed, 20/20 assertions passed**.
+- Custom single-session audit: **95/100** on its documented rubric.
 
-- HTML
-- CSS
-- JavaScript
-- `localStorage`
-
-It does not use:
-
-- a backend
-- a database
-- a paid API
-- an exposed API key
-- external dependencies
-- Google login
-- fake login
-- ads
-- tracking
-
-## Main Flow
-
-1. Open Theorem.
-2. Paste notes, homework, study material, worksheets, textbook sections, or code.
-3. Or upload a `.txt` / `.md` file.
-4. Click **Build my study session**.
-5. Theorem auto-detects the subject.
-6. Theorem chooses the best study mode it can.
-7. Theorem creates a guided learning session.
-8. Progress saves locally in the browser.
-
-There is no manual subject dropdown.
-
-## Supported Study Modes
-
-### Math
-
-If Theorem detects supported Algebra 1 problems, it uses exact checking.
-
-Math mode includes:
-
-- exact answer checking
-- step-by-step tutoring
-- hints
-- mistake diagnosis
-- repair drills
-- mastery-style follow-up practice
-
-Supported formats include:
-
-```text
-2x + 5 = 17
-3x - 4 = 11
-5x + 2 = 27
-3x + 2x + 5
-4x + x + 7
-6x - 2x + 9
-3(x + 4)
-2(x + 5)
-5(x - 2)
+These are scoped results, not universal intelligence or full HumanEval scores. Read the benchmark limitations before comparing models.
