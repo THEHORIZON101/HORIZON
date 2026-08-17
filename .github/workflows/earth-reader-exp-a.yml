@@ -24,10 +24,9 @@ jobs:
           base='https://zenodo.org/records/7244319/files'
           for f in 01_vld_c.npy 01_vld_y.npy 01_tst_c.npy 01_tst_y.npy; do
             curl -L --fail --retry 8 --retry-delay 5 --connect-timeout 30 "$base/$f?download=1" -o "$f"
-            ls -lh "$f"
           done
 
-      - name: Run precipitation-only residual correction test
+      - name: Run aligned full-coverage residual correction test
         run: |
           cat > /tmp/exp.py <<'PY'
           import json
@@ -36,171 +35,134 @@ jobs:
           from sklearn.ensemble import HistGradientBoostingRegressor
           from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 
-          THRESH = 0.1  # mm/h rain occurrence threshold used for this fallback benchmark
+          RAIN_THRESHOLD = 0.1
           RNG = np.random.default_rng(20260816)
 
-          v_c = np.load('01_vld_c.npy', mmap_mode='r')
-          v_y = np.load('01_vld_y.npy', mmap_mode='r')
-          t_c = np.load('01_tst_c.npy', mmap_mode='r')
-          t_y = np.load('01_tst_y.npy', mmap_mode='r')
-          print('SHAPES', v_c.shape, v_y.shape, t_c.shape, t_y.shape, flush=True)
+          v_c = np.squeeze(np.load('01_vld_c.npy')).astype(np.float32)
+          v_y_hi = np.squeeze(np.load('01_vld_y.npy')).astype(np.float32)
+          t_c = np.squeeze(np.load('01_tst_c.npy')).astype(np.float32)
+          t_y_hi = np.squeeze(np.load('01_tst_y.npy')).astype(np.float32)
+          print('ORIGINAL_SHAPES', v_c.shape, v_y_hi.shape, t_c.shape, t_y_hi.shape, flush=True)
 
-          def squeeze_precip(a):
-              a = np.asarray(a)
-              # Remove singleton dimensions only. Preserve time and spatial axes.
-              a = np.squeeze(a)
-              return a.astype(np.float32, copy=False)
+          def downsample_radar_to_nwp(y, c):
+              if y.shape == c.shape:
+                  return y
+              if y.ndim != 3 or c.ndim != 3 or y.shape[0] != c.shape[0]:
+                  raise RuntimeError(f'Unexpected dimensions: radar={y.shape}, nwp={c.shape}')
+              if y.shape[1] != 2*c.shape[1] or y.shape[2] != 2*c.shape[2]:
+                  raise RuntimeError(f'Expected exact 2x radar grid: radar={y.shape}, nwp={c.shape}')
+              # For an exact factor-of-two resize, bilinear interpolation with
+              # align_corners=False (the authors' preprocessing) is the mean
+              # of each aligned 2x2 source block.
+              n,h,w = c.shape
+              return y.reshape(n,h,2,w,2).mean(axis=(2,4)).astype(np.float32)
 
-          v_c = squeeze_precip(v_c)
-          v_y = squeeze_precip(v_y)
-          t_c = squeeze_precip(t_c)
-          t_y = squeeze_precip(t_y)
+          v_y = downsample_radar_to_nwp(v_y_hi, v_c)
+          t_y = downsample_radar_to_nwp(t_y_hi, t_c)
+          del v_y_hi, t_y_hi
+          print('ALIGNED_SHAPES', v_c.shape, v_y.shape, t_c.shape, t_y.shape, flush=True)
 
-          # If NWP and radar differ by an outer border, center-crop to common spatial shape.
-          def align(a, b):
-              if a.shape == b.shape:
-                  return a, b
-              if a.ndim != b.ndim:
-                  raise RuntimeError(f'Cannot align dims: {a.shape} vs {b.shape}')
-              target = tuple(min(x,y) for x,y in zip(a.shape,b.shape))
-              def crop(x):
-                  sl=[]
-                  for n,m in zip(x.shape,target):
-                      d=n-m; s=d//2; sl.append(slice(s,s+m))
-                  return x[tuple(sl)]
-              return crop(a), crop(b)
-
-          v_c, v_y = align(v_c, v_y)
-          t_c, t_y = align(t_c, t_y)
-          print('ALIGNED', v_c.shape, v_y.shape, t_c.shape, t_y.shape, flush=True)
-
-          # Interpret first dimension as samples/time when >=3D; last two as spatial.
-          # For lower-dimensional arrays, fall back to scalar features.
           def feature_arrays(c):
-              c = np.nan_to_num(c, nan=0.0, posinf=0.0, neginf=0.0)
-              if c.ndim >= 3:
-                  # Only smooth spatial axes; keep sample/time axis independent.
-                  size = (1,) * (c.ndim - 2) + (3,3)
-                  mean3 = uniform_filter(c, size=size, mode='nearest')
-                  max3 = maximum_filter(c, size=size, mode='nearest')
-                  mean9 = uniform_filter(c, size=(1,)*(c.ndim-2)+(9,9), mode='nearest')
-                  # spatial coordinates broadcast over preceding dims
-                  h,w = c.shape[-2:]
-                  yy,xx = np.mgrid[0:h,0:w]
-                  xx = (xx/(max(w-1,1))).astype(np.float32)
-                  yy = (yy/(max(h-1,1))).astype(np.float32)
-                  shape = (1,)*(c.ndim-2)+(h,w)
-                  xx = np.broadcast_to(xx.reshape(shape), c.shape)
-                  yy = np.broadcast_to(yy.reshape(shape), c.shape)
-                  return [c, mean3, max3, mean9, xx, yy]
-              return [c]
+              clean=np.nan_to_num(c,nan=0.0,posinf=0.0,neginf=0.0)
+              mean3=uniform_filter(clean,size=(1,3,3),mode='nearest')
+              max3=maximum_filter(clean,size=(1,3,3),mode='nearest')
+              mean9=uniform_filter(clean,size=(1,9,9),mode='nearest')
+              h,w=clean.shape[-2:]
+              yy,xx=np.mgrid[0:h,0:w]
+              xx=np.broadcast_to((xx/max(w-1,1)).astype(np.float32),(clean.shape[0],h,w))
+              yy=np.broadcast_to((yy/max(h-1,1)).astype(np.float32),(clean.shape[0],h,w))
+              return [clean,mean3,max3,mean9,xx,yy]
 
-          v_feats = feature_arrays(v_c)
-          t_feats = feature_arrays(t_c)
+          v_feats=feature_arrays(v_c)
+          t_feats=feature_arrays(t_c)
 
-          def valid_flat(c,y,feats):
-              masks = np.isfinite(c) & np.isfinite(y)
-              idx = np.flatnonzero(masks.ravel())
-              return idx
+          def valid_indices(c,y,start_sample,end_sample):
+              per=c.shape[1]*c.shape[2]
+              lo=start_sample*per; hi=end_sample*per
+              idx=np.arange(lo,hi,dtype=np.int64)
+              m=np.isfinite(c.ravel()[idx]) & np.isfinite(y.ravel()[idx])
+              return idx[m]
 
-          vidx = valid_flat(v_c,v_y,v_feats)
-          tidx = valid_flat(t_c,t_y,t_feats)
-          print('VALID_PIXELS', len(vidx), len(tidx), flush=True)
+          split_sample=int(v_c.shape[0]*0.70)
+          fit_pool=valid_indices(v_c,v_y,0,split_sample)
+          cal_idx=valid_indices(v_c,v_y,split_sample,v_c.shape[0])
+          test_idx=valid_indices(t_c,t_y,0,t_c.shape[0])
 
-          # Preserve chronological/sample ordering for development split when possible.
-          # Flattening keeps C-order: earlier sample/time blocks appear first.
-          cut = int(len(vidx)*0.70)
-          fit_pool = vidx[:cut]
-          cal_pool = vidx[cut:]
+          def balanced_training_sample(indices,y,max_n=400000):
+              vals=y.ravel()[indices]
+              pos=indices[vals>=RAIN_THRESHOLD]
+              neg=indices[vals<RAIN_THRESHOLD]
+              n=min(len(pos),len(neg),max_n//2)
+              out=np.concatenate([RNG.choice(pos,n,replace=False),RNG.choice(neg,n,replace=False)])
+              RNG.shuffle(out)
+              return out
 
-          def balanced_subsample(indices, y, max_n):
-              yr = y.ravel()[indices]
-              pos = indices[yr >= THRESH]
-              neg = indices[yr < THRESH]
-              n_each = min(len(pos), len(neg), max_n//2)
-              if n_each < 1000:
-                  take = RNG.choice(indices, size=min(max_n,len(indices)), replace=False)
-                  return take
-              p = RNG.choice(pos, n_each, replace=False)
-              n = RNG.choice(neg, n_each, replace=False)
-              out = np.concatenate([p,n]); RNG.shuffle(out); return out
+          fit_idx=balanced_training_sample(fit_pool,v_y)
+          print('PIXELS', {'fit':len(fit_idx),'calibration':len(cal_idx),'blind_test':len(test_idx)}, flush=True)
 
-          fit_idx = balanced_subsample(fit_pool, v_y, 300_000)
-          cal_idx = balanced_subsample(cal_pool, v_y, 300_000)
-          test_idx = balanced_subsample(tidx, t_y, 1_000_000)
-
-          def X_at(feats, idx):
+          def X_at(feats,idx):
               return np.column_stack([f.ravel()[idx] for f in feats]).astype(np.float32)
 
-          Xfit = X_at(v_feats, fit_idx)
-          raw_fit = v_c.ravel()[fit_idx].astype(np.float32)
-          yfit = v_y.ravel()[fit_idx].astype(np.float32)
-          residual = yfit - raw_fit
+          Xfit=X_at(v_feats,fit_idx)
+          raw_fit=v_c.ravel()[fit_idx].astype(np.float32)
+          yfit=v_y.ravel()[fit_idx].astype(np.float32)
+          residual=yfit-raw_fit
 
-          model = HistGradientBoostingRegressor(
-              loss='absolute_error',
-              learning_rate=0.07,
-              max_iter=220,
-              max_leaf_nodes=31,
-              l2_regularization=1.0,
-              random_state=20260816,
-          )
-          model.fit(Xfit, residual)
+          model=HistGradientBoostingRegressor(
+              loss='absolute_error',learning_rate=0.07,max_iter=260,
+              max_leaf_nodes=31,l2_regularization=1.0,random_state=20260816)
+          model.fit(Xfit,residual)
 
           def corrected(feats,c,idx):
-              X=X_at(feats,idx)
               raw=c.ravel()[idx].astype(np.float32)
-              return np.maximum(0.0, raw + model.predict(X).astype(np.float32))
+              return np.maximum(0.0,raw+model.predict(X_at(feats,idx)).astype(np.float32))
 
-          # Tune occurrence thresholds only on held-out calibration segment.
-          cal_y = v_y.ravel()[cal_idx] >= THRESH
-          cal_raw = v_c.ravel()[cal_idx].astype(np.float32)
-          cal_corr = corrected(v_feats,v_c,cal_idx)
+          cal_y=v_y.ravel()[cal_idx]>=RAIN_THRESHOLD
+          cal_raw=v_c.ravel()[cal_idx].astype(np.float32)
+          cal_corr=corrected(v_feats,v_c,cal_idx)
 
-          def tune_threshold(values, labels):
-              # Dense log-ish threshold grid plus zero.
-              qs=np.unique(np.quantile(values[np.isfinite(values)], np.linspace(0.01,0.99,120)))
-              candidates=np.unique(np.concatenate([[0.0, THRESH], qs]))
-              best=(-1,None)
-              for th in candidates:
-                  s=balanced_accuracy_score(labels, values>=th)
-                  if s>best[0]: best=(float(s),float(th))
+          def tune_threshold(values,labels):
+              finite=values[np.isfinite(values)]
+              # Quantiles keep the search tied only to development data.
+              cand=np.unique(np.concatenate(([0.0,RAIN_THRESHOLD],np.quantile(finite,np.linspace(.002,.998,180)))))
+              best=(-1.0,None)
+              for th in cand:
+                  ba=balanced_accuracy_score(labels,values>=th)
+                  if ba>best[0]: best=(float(ba),float(th))
               return best
 
-          raw_cal_ba, raw_th = tune_threshold(cal_raw, cal_y)
-          corr_cal_ba, corr_th = tune_threshold(cal_corr, cal_y)
+          raw_cal_ba,raw_th=tune_threshold(cal_raw,cal_y)
+          corr_cal_ba,corr_th=tune_threshold(cal_corr,cal_y)
 
-          test_y = t_y.ravel()[test_idx] >= THRESH
-          test_raw = t_c.ravel()[test_idx].astype(np.float32)
-          test_corr = corrected(t_feats,t_c,test_idx)
+          # Full untouched test set: no selective prediction and no subsampling.
+          test_y=t_y.ravel()[test_idx]>=RAIN_THRESHOLD
+          test_raw=t_c.ravel()[test_idx].astype(np.float32)
+          test_corr=corrected(t_feats,t_c,test_idx)
+          raw_pred=test_raw>=raw_th
+          corr_pred=test_corr>=corr_th
 
-          raw_pred = test_raw >= raw_th
-          corr_pred = test_corr >= corr_th
-          raw_ba = balanced_accuracy_score(test_y,raw_pred)
-          corr_ba = balanced_accuracy_score(test_y,corr_pred)
+          def score(pred):
+              tn,fp,fn,tp=confusion_matrix(test_y,pred,labels=[False,True]).ravel()
+              sens=tp/(tp+fn); spec=tn/(tn+fp)
+              return {'balanced_accuracy':float((sens+spec)/2),'sensitivity':float(sens),'specificity':float(spec),
+                      'tn':int(tn),'fp':int(fp),'fn':int(fn),'tp':int(tp)}
 
-          def stats(pred):
-              tn,fp,fn,tp = confusion_matrix(test_y,pred,labels=[False,True]).ravel()
-              sens=tp/(tp+fn) if tp+fn else float('nan')
-              spec=tn/(tn+fp) if tn+fp else float('nan')
-              return dict(tn=int(tn),fp=int(fp),fn=int(fn),tp=int(tp),sensitivity=float(sens),specificity=float(spec))
-
+          raw=score(raw_pred); corr=score(corr_pred)
           result={
-              'benchmark':'PostRainBench Germany / COSMO-DE-EPS precipitation-only fallback',
-              'rain_definition_mm_per_h':THRESH,
+              'benchmark':'PostRainBench Germany COSMO-DE-EPS vs RADKLIM, precipitation-only mechanism test',
+              'rain_definition_mm_per_h':RAIN_THRESHOLD,
+              'alignment':'RADKLIM 72x72 -> NWP 36x36 by factor-2 bilinear/2x2 mean',
+              'chronology':'first 70% validation samples fit; last 30% calibration; official test untouched',
+              'coverage':'all finite test pixels',
               'development_fit_pixels':int(len(fit_idx)),
               'development_calibration_pixels':int(len(cal_idx)),
               'blind_test_pixels':int(len(test_idx)),
-              'raw_threshold':raw_th,
-              'corrected_threshold':corr_th,
+              'raw_threshold':raw_th,'corrected_threshold':corr_th,
               'raw_validation_balanced_accuracy':raw_cal_ba,
               'corrected_validation_balanced_accuracy':corr_cal_ba,
-              'raw_test_balanced_accuracy':float(raw_ba),
-              'corrected_test_balanced_accuracy':float(corr_ba),
-              'delta_percentage_points':float((corr_ba-raw_ba)*100),
-              'raw_test':stats(raw_pred),
-              'corrected_test':stats(corr_pred),
+              'raw_test':raw,'corrected_test':corr,
+              'delta_percentage_points':float((corr['balanced_accuracy']-raw['balanced_accuracy'])*100)
           }
-          print('EARTH_READER_RESULT='+json.dumps(result,sort_keys=True), flush=True)
+          print('EARTH_READER_RESULT='+json.dumps(result,sort_keys=True),flush=True)
           PY
           python /tmp/exp.py
