@@ -1,12 +1,11 @@
-name: Earth Reader Experiment A
+name: Earth Reader Experiment A Geometry
 
 on:
   push:
     branches: [earth-reader-exp-a]
-  workflow_dispatch:
 
 jobs:
-  residual-test:
+  geometry-test:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -24,12 +23,11 @@ jobs:
           base='https://zenodo.org/records/7244319/files'
           for f in 01_vld_c.npy 01_vld_y.npy 01_vld_x.npy 01_vld_t.npy 01_tst_c.npy 01_tst_y.npy 01_tst_x.npy 01_tst_t.npy; do
             curl -L --fail --retry 8 --retry-delay 5 --connect-timeout 30 "$base/$f?download=1" -o "$f"
-            ls -lh "$f"
           done
 
-      - name: Compare precipitation-only and full-state residual correctors
+      - name: Run selected-channel geometry experiment
         run: |
-          cat > /tmp/full_state.py <<'PY'
+          cat > /tmp/geometry.py <<'PY'
           import json, numpy as np
           from scipy.ndimage import uniform_filter, maximum_filter
           import lightgbm as lgb
@@ -37,146 +35,169 @@ jobs:
 
           RAIN=0.1
           RNG=np.random.default_rng(20260816)
-          CHUNK=180_000
+          CHUNK=120_000
+          TOPK=12
 
           vc=np.squeeze(np.load('01_vld_c.npy',mmap_mode='r')).astype(np.float32,copy=False)
           vyh=np.squeeze(np.load('01_vld_y.npy',mmap_mode='r')).astype(np.float32,copy=False)
           vx=np.load('01_vld_x.npy',mmap_mode='r')
+          vt=np.load('01_vld_t.npy',allow_pickle=True)
           tc=np.squeeze(np.load('01_tst_c.npy',mmap_mode='r')).astype(np.float32,copy=False)
           tyh=np.squeeze(np.load('01_tst_y.npy',mmap_mode='r')).astype(np.float32,copy=False)
           tx=np.load('01_tst_x.npy',mmap_mode='r')
-          vt=np.load('01_vld_t.npy',allow_pickle=True)
-          tt=np.load('01_tst_t.npy',allow_pickle=True)
-          print('SHAPES',vc.shape,vyh.shape,vx.shape,tc.shape,tyh.shape,tx.shape,vt.shape,tt.shape,flush=True)
 
           def down2(y,c):
               n,h,w=c.shape
-              if y.shape==(n,h,w): return np.asarray(y,dtype=np.float32)
-              if y.shape!=(n,2*h,2*w): raise RuntimeError((y.shape,c.shape))
-              # Matches factor-2 bilinear align_corners=False used in benchmark preprocessing.
               return np.asarray(y).reshape(n,h,2,w,2).mean(axis=(2,4)).astype(np.float32)
-          vy=down2(vyh,vc); ty=down2(tyh,tc)
-          del vyh,tyh
+          vy=down2(vyh,vc); ty=down2(tyh,tc); del vyh,tyh
 
-          def precip_maps(c):
+          H,W=vc.shape[1:]; PER=H*W
+          def p_maps(c):
               z=np.nan_to_num(np.asarray(c),nan=0.0,posinf=0.0,neginf=0.0)
               m3=uniform_filter(z,size=(1,3,3),mode='nearest')
               mx3=maximum_filter(z,size=(1,3,3),mode='nearest')
               m9=uniform_filter(z,size=(1,9,9),mode='nearest')
-              h,w=z.shape[-2:]; yy,xx=np.mgrid[0:h,0:w]
-              xx=(xx/max(w-1,1)).astype(np.float32); yy=(yy/max(h-1,1)).astype(np.float32)
-              return z,m3,mx3,m9,xx,yy
-          vpm=precip_maps(vc); tpm=precip_maps(tc)
-          H,W=vc.shape[1:]; PER=H*W
-
-          def idx_for_samples(samples,c,y):
-              samples=np.asarray(samples,dtype=np.int64)
-              base=(samples[:,None]*PER + np.arange(PER,dtype=np.int64)[None,:]).ravel()
-              mask=np.isfinite(c.ravel()[base]) & np.isfinite(y.ravel()[base])
-              return base[mask]
-
-          def ordered_samples(times):
-              a=np.asarray(times).reshape(-1)
-              try: return np.argsort(a,kind='stable')
-              except Exception: return np.arange(len(a))
-          order=ordered_samples(vt)
-          cut=int(len(order)*.70)
-          fit_samples=order[:cut]; cal_samples=order[cut:]
-          fit_pool=idx_for_samples(fit_samples,vc,vy)
-          cal_idx=idx_for_samples(cal_samples,vc,vy)
-          test_idx=idx_for_samples(np.arange(tc.shape[0]),tc,ty)
-
-          def balanced_fit(indices,y,max_n=220_000):
-              vals=y.ravel()[indices]
-              p=indices[vals>=RAIN]; n=indices[vals<RAIN]
-              k=min(len(p),len(n),max_n//2)
-              out=np.concatenate([RNG.choice(p,k,replace=False),RNG.choice(n,k,replace=False)])
-              RNG.shuffle(out); return out
-          fit_idx=balanced_fit(fit_pool,vy)
-          print('COUNTS',{'fit':len(fit_idx),'cal':len(cal_idx),'test':len(test_idx)},flush=True)
+              yy,xx=np.mgrid[0:H,0:W]
+              return z,m3,mx3,m9,(xx/max(W-1,1)).astype(np.float32),(yy/max(H-1,1)).astype(np.float32)
+          vpm=p_maps(vc); tpm=p_maps(tc)
 
           def positions(idx):
               s=idx//PER; rem=idx%PER; r=rem//W; c=rem%W
               return s,r,c
-
           def precip_X(pm,idx):
-              s,r,c=positions(idx)
-              z,m3,mx3,m9,xx,yy=pm
-              return np.column_stack((z[s,r,c],m3[s,r,c],mx3[s,r,c],m9[s,r,c],xx[r,c],yy[r,c])).astype(np.float32)
-
-          def full_X(x,pm,idx):
+              s,r,c=positions(idx); z,m3,mx3,m9,xx,yy=pm
+              return np.column_stack([z[s,r,c],m3[s,r,c],mx3[s,r,c],m9[s,r,c],xx[r,c],yy[r,c]]).astype(np.float32)
+          def point_X(x,pm,idx):
               s,r,c=positions(idx)
               state=np.asarray(x[s,r,c,:],dtype=np.float32)
               state=np.nan_to_num(state,nan=0.0,posinf=0.0,neginf=0.0)
-              return np.concatenate((precip_X(pm,idx),state),axis=1)
+              return np.concatenate([precip_X(pm,idx),state],axis=1)
 
-          residual=vy.ravel()[fit_idx].astype(np.float32)-vc.ravel()[fit_idx].astype(np.float32)
-          common=dict(objective='regression_l1',n_estimators=350,learning_rate=.045,num_leaves=31,
-                      min_child_samples=80,subsample=.85,colsample_bytree=.72,reg_lambda=1.0,
-                      random_state=20260816,n_jobs=-1,verbosity=-1)
-          pmodel=lgb.LGBMRegressor(**common)
-          xmodel=lgb.LGBMRegressor(**common)
-          pmodel.fit(precip_X(vpm,fit_idx),residual)
-          xmodel.fit(full_X(vx,vpm,fit_idx),residual)
+          def idx_samples(samples,c,y):
+              samples=np.asarray(samples,dtype=np.int64)
+              ids=(samples[:,None]*PER+np.arange(PER,dtype=np.int64)[None,:]).ravel()
+              m=np.isfinite(c.ravel()[ids]) & np.isfinite(y.ravel()[ids])
+              return ids[m]
+          order=np.argsort(np.asarray(vt).reshape(-1),kind='stable')
+          cut=int(len(order)*.70)
+          fit_pool=idx_samples(order[:cut],vc,vy)
+          cal_idx=idx_samples(order[cut:],vc,vy)
+          test_idx=idx_samples(np.arange(tc.shape[0]),tc,ty)
+          def balanced(indices,y,nmax=220000):
+              vals=y.ravel()[indices]; p=indices[vals>=RAIN]; n=indices[vals<RAIN]
+              k=min(len(p),len(n),nmax//2)
+              out=np.concatenate([RNG.choice(p,k,replace=False),RNG.choice(n,k,replace=False)])
+              RNG.shuffle(out); return out
+          fit_idx=balanced(fit_pool,vy)
+          yfit_amount=vy.ravel()[fit_idx].astype(np.float32)
+          rawfit=vc.ravel()[fit_idx].astype(np.float32)
+          resid=yfit_amount-rawfit
+          yfit_event=(yfit_amount>=RAIN).astype(np.int8)
+          print('COUNTS',len(fit_idx),len(cal_idx),len(test_idx),flush=True)
+
+          common=dict(n_estimators=300,learning_rate=.045,num_leaves=31,min_child_samples=80,
+                      subsample=.85,colsample_bytree=.75,reg_lambda=1.0,random_state=20260816,n_jobs=-1,verbosity=-1)
+          # Selector uses the full local 143-vector only to identify informative channels.
+          selector=lgb.LGBMRegressor(objective='regression_l1',**common)
+          selector.fit(point_X(vx,vpm,fit_idx),resid)
+          imp=np.asarray(selector.feature_importances_[6:])
+          top=np.argsort(imp)[-TOPK:][::-1].astype(int)
+          print('TOP_CHANNEL_INDICES',top.tolist(),flush=True)
+          print('TOP_CHANNEL_IMPORTANCE',imp[top].tolist(),flush=True)
+
+          def geo_X(x,pm,idx):
+              s,r,c=positions(idx)
+              rm=np.maximum(r-1,0); rp=np.minimum(r+1,H-1)
+              cm=np.maximum(c-1,0); cp=np.minimum(c+1,W-1)
+              kk=top[None,:]
+              ss=s[:,None]
+              center=np.asarray(x[ss,r[:,None],c[:,None],kk],dtype=np.float32)
+              left=np.asarray(x[ss,r[:,None],cm[:,None],kk],dtype=np.float32)
+              right=np.asarray(x[ss,r[:,None],cp[:,None],kk],dtype=np.float32)
+              up=np.asarray(x[ss,rm[:,None],c[:,None],kk],dtype=np.float32)
+              down=np.asarray(x[ss,rp[:,None],c[:,None],kk],dtype=np.float32)
+              for a in (center,left,right,up,down): np.nan_to_num(a,copy=False,nan=0.0,posinf=0.0,neginf=0.0)
+              dx=(right-left)*0.5
+              dy=(down-up)*0.5
+              lap=left+right+up+down-4.0*center
+              mean5=(center+left+right+up+down)/5.0
+              max5=np.maximum.reduce([center,left,right,up,down])
+              min5=np.minimum.reduce([center,left,right,up,down])
+              spread=max5-min5
+              return np.concatenate([precip_X(pm,idx),center,dx,dy,lap,mean5,spread],axis=1).astype(np.float32,copy=False)
+
+          pmodel=lgb.LGBMRegressor(objective='regression_l1',**common)
+          gmodel=lgb.LGBMRegressor(objective='regression_l1',**common)
+          gclf=lgb.LGBMClassifier(objective='binary',**common)
+          pmodel.fit(precip_X(vpm,fit_idx),resid)
+          GX=geo_X(vx,vpm,fit_idx)
+          gmodel.fit(GX,resid)
+          gclf.fit(GX,yfit_event)
+          del GX
           print('MODELS_FIT',flush=True)
 
-          def predict_corr(model,x,pm,c,indices,full):
-              out=np.empty(len(indices),dtype=np.float32)
-              rawflat=c.ravel()
-              for a in range(0,len(indices),CHUNK):
-                  ids=indices[a:a+CHUNK]
-                  X=full_X(x,pm,ids) if full else precip_X(pm,ids)
-                  out[a:a+len(ids)]=np.maximum(0.0,rawflat[ids]+model.predict(X).astype(np.float32))
-              return out
+          def corr_predict(model,x,pm,c,ids,kind):
+              raw=c.ravel()[ids].astype(np.float32)
+              X=precip_X(pm,ids) if kind=='precip' else geo_X(x,pm,ids)
+              return np.maximum(0.0,raw+model.predict(X).astype(np.float32))
+          def geom_prob(x,pm,ids):
+              return gclf.predict_proba(geo_X(x,pm,ids))[:,1].astype(np.float32)
 
+          # Build calibration predictions chunkwise.
+          def collect_cal():
+              raw=np.empty(len(cal_idx),np.float32); pre=np.empty_like(raw); geo=np.empty_like(raw); prob=np.empty_like(raw)
+              flat=vc.ravel()
+              for a in range(0,len(cal_idx),CHUNK):
+                  ids=cal_idx[a:a+CHUNK]; n=len(ids)
+                  raw[a:a+n]=flat[ids]
+                  pre[a:a+n]=corr_predict(pmodel,vx,vpm,vc,ids,'precip')
+                  geo[a:a+n]=corr_predict(gmodel,vx,vpm,vc,ids,'geo')
+                  prob[a:a+n]=geom_prob(vx,vpm,ids)
+              return raw,pre,geo,prob
+          cal_raw,cal_pre,cal_geo,cal_prob=collect_cal()
           cal_y=vy.ravel()[cal_idx]>=RAIN
-          cal_raw=vc.ravel()[cal_idx].astype(np.float32)
-          cal_p=predict_corr(pmodel,vx,vpm,vc,cal_idx,False)
-          cal_x=predict_corr(xmodel,vx,vpm,vc,cal_idx,True)
-
-          def tune(vals,labels):
-              cand=np.unique(np.concatenate(([0.0,RAIN],np.quantile(vals[np.isfinite(vals)],np.linspace(.002,.998,180)))))
+          def tune(vals,labels,include_rain=False):
+              extra=[0.0,0.5] if not include_rain else [0.0,RAIN]
+              cand=np.unique(np.concatenate([extra,np.quantile(vals[np.isfinite(vals)],np.linspace(.002,.998,180))]))
               best=(-1.0,None)
               for th in cand:
                   ba=balanced_accuracy_score(labels,vals>=th)
                   if ba>best[0]: best=(float(ba),float(th))
               return best
-          rva,rth=tune(cal_raw,cal_y); pva,pth=tune(cal_p,cal_y); xva,xth=tune(cal_x,cal_y)
-          print('VAL',{'raw':rva,'precip_resid':pva,'full_state_resid':xva},flush=True)
+          rva,rth=tune(cal_raw,cal_y,True)
+          pva,pth=tune(cal_pre,cal_y,True)
+          gva,gth=tune(cal_geo,cal_y,True)
+          cva,cth=tune(cal_prob,cal_y,False)
+          print('VALIDATION',{'raw':rva,'precip_resid':pva,'geometry_resid':gva,'geometry_classifier':cva},flush=True)
 
-          def test_stream():
-              counts={k:np.zeros(4,dtype=np.int64) for k in ('raw','precip','full')}
-              yflat=ty.ravel(); cflat=tc.ravel()
-              for a in range(0,len(test_idx),CHUNK):
-                  ids=test_idx[a:a+CHUNK]
-                  y=yflat[ids]>=RAIN; raw=cflat[ids].astype(np.float32)
-                  pc=np.maximum(0.0,raw+pmodel.predict(precip_X(tpm,ids)).astype(np.float32))
-                  xc=np.maximum(0.0,raw+xmodel.predict(full_X(tx,tpm,ids)).astype(np.float32))
-                  for name,pred in [('raw',raw>=rth),('precip',pc>=pth),('full',xc>=xth)]:
-                      tn=np.sum(~y & ~pred); fp=np.sum(~y & pred); fn=np.sum(y & ~pred); tp=np.sum(y & pred)
-                      counts[name]+=np.array([tn,fp,fn,tp],dtype=np.int64)
-              return counts
-          counts=test_stream()
+          names=('raw','precip','geometry_resid','geometry_classifier')
+          counts={k:np.zeros(4,dtype=np.int64) for k in names}
+          yflat=ty.ravel(); cflat=tc.ravel()
+          for a in range(0,len(test_idx),CHUNK):
+              ids=test_idx[a:a+CHUNK]; y=yflat[ids]>=RAIN; raw=cflat[ids].astype(np.float32)
+              pre=corr_predict(pmodel,tx,tpm,tc,ids,'precip')
+              geo=corr_predict(gmodel,tx,tpm,tc,ids,'geo')
+              prob=geom_prob(tx,tpm,ids)
+              preds={'raw':raw>=rth,'precip':pre>=pth,'geometry_resid':geo>=gth,'geometry_classifier':prob>=cth}
+              for name,pred in preds.items():
+                  counts[name]+=np.array([np.sum(~y&~pred),np.sum(~y&pred),np.sum(y&~pred),np.sum(y&pred)],dtype=np.int64)
 
-          def score(q):
-              tn,fp,fn,tp=map(int,q); sens=tp/(tp+fn); spec=tn/(tn+fp)
-              return {'balanced_accuracy':(sens+spec)/2,'sensitivity':sens,'specificity':spec,
-                      'tn':tn,'fp':fp,'fn':fn,'tp':tp}
-          raw=score(counts['raw']); pre=score(counts['precip']); full=score(counts['full'])
+          def score(v):
+              tn,fp,fn,tp=map(int,v); sens=tp/(tp+fn); spec=tn/(tn+fp)
+              return {'balanced_accuracy':(sens+spec)/2,'sensitivity':sens,'specificity':spec,'tn':tn,'fp':fp,'fn':fn,'tp':tp}
+          scores={k:score(v) for k,v in counts.items()}
           result={
-            'benchmark':'PostRainBench Germany COSMO-DE-EPS 143-channel state mechanism test',
-            'rain_threshold_mm_per_h':RAIN,'coverage':'all finite official test pixels',
-            'alignment':'72x72 radar downsampled to aligned 36x36 NWP grid by factor-2 bilinear/2x2 mean',
-            'development':'validation samples sorted by provided time; first 70% fit, last 30% threshold calibration',
-            'fit_pixels':len(fit_idx),'calibration_pixels':len(cal_idx),'blind_test_pixels':len(test_idx),
-            'nwp_channels':int(vx.shape[-1]),
-            'thresholds':{'raw':rth,'precip_residual':pth,'full_state_residual':xth},
-            'validation_ba':{'raw':rva,'precip_residual':pva,'full_state_residual':xva},
-            'raw':raw,'precip_residual':pre,'full_state_residual':full,
-            'gain_precip_vs_raw_pp':(pre['balanced_accuracy']-raw['balanced_accuracy'])*100,
-            'gain_full_vs_raw_pp':(full['balanced_accuracy']-raw['balanced_accuracy'])*100,
-            'gain_full_vs_precip_pp':(full['balanced_accuracy']-pre['balanced_accuracy'])*100
+             'benchmark':'PostRainBench Germany selected-channel atmospheric geometry test',
+             'rain_threshold_mm_per_h':RAIN,'blind_test_pixels':len(test_idx),'coverage':'all finite official test pixels',
+             'top_k_channels':TOPK,'selected_channel_indices':top.tolist(),
+             'geometry_features_per_channel':['center','dx','dy','laplacian','cross_mean','cross_spread'],
+             'validation_ba':{'raw':rva,'precip_residual':pva,'geometry_residual':gva,'geometry_classifier':cva},
+             'thresholds':{'raw':rth,'precip_residual':pth,'geometry_residual':gth,'geometry_classifier':cth},
+             'scores':scores,
+             'gain_geometry_residual_vs_raw_pp':(scores['geometry_resid']['balanced_accuracy']-scores['raw']['balanced_accuracy'])*100,
+             'gain_geometry_classifier_vs_raw_pp':(scores['geometry_classifier']['balanced_accuracy']-scores['raw']['balanced_accuracy'])*100,
+             'gain_best_geometry_vs_precip_pp':(max(scores['geometry_resid']['balanced_accuracy'],scores['geometry_classifier']['balanced_accuracy'])-scores['precip']['balanced_accuracy'])*100
           }
           print('EARTH_READER_RESULT='+json.dumps(result,sort_keys=True),flush=True)
           PY
-          python /tmp/full_state.py
+          python /tmp/geometry.py
