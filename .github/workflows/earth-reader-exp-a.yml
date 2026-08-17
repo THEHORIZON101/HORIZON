@@ -1,0 +1,206 @@
+name: Earth Reader Experiment A
+
+on:
+  push:
+    branches: [earth-reader-exp-a]
+  workflow_dispatch:
+
+jobs:
+  residual-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scipy scikit-learn
+
+      - name: Download public PostRainBench Germany validation and test arrays
+        run: |
+          set -euxo pipefail
+          base='https://zenodo.org/records/7244319/files'
+          for f in 01_vld_c.npy 01_vld_y.npy 01_tst_c.npy 01_tst_y.npy; do
+            curl -L --fail --retry 8 --retry-delay 5 --connect-timeout 30 "$base/$f?download=1" -o "$f"
+            ls -lh "$f"
+          done
+
+      - name: Run precipitation-only residual correction test
+        run: |
+          cat > /tmp/exp.py <<'PY'
+          import json
+          import numpy as np
+          from scipy.ndimage import uniform_filter, maximum_filter
+          from sklearn.ensemble import HistGradientBoostingRegressor
+          from sklearn.metrics import balanced_accuracy_score, confusion_matrix
+
+          THRESH = 0.1  # mm/h rain occurrence threshold used for this fallback benchmark
+          RNG = np.random.default_rng(20260816)
+
+          v_c = np.load('01_vld_c.npy', mmap_mode='r')
+          v_y = np.load('01_vld_y.npy', mmap_mode='r')
+          t_c = np.load('01_tst_c.npy', mmap_mode='r')
+          t_y = np.load('01_tst_y.npy', mmap_mode='r')
+          print('SHAPES', v_c.shape, v_y.shape, t_c.shape, t_y.shape, flush=True)
+
+          def squeeze_precip(a):
+              a = np.asarray(a)
+              # Remove singleton dimensions only. Preserve time and spatial axes.
+              a = np.squeeze(a)
+              return a.astype(np.float32, copy=False)
+
+          v_c = squeeze_precip(v_c)
+          v_y = squeeze_precip(v_y)
+          t_c = squeeze_precip(t_c)
+          t_y = squeeze_precip(t_y)
+
+          # If NWP and radar differ by an outer border, center-crop to common spatial shape.
+          def align(a, b):
+              if a.shape == b.shape:
+                  return a, b
+              if a.ndim != b.ndim:
+                  raise RuntimeError(f'Cannot align dims: {a.shape} vs {b.shape}')
+              target = tuple(min(x,y) for x,y in zip(a.shape,b.shape))
+              def crop(x):
+                  sl=[]
+                  for n,m in zip(x.shape,target):
+                      d=n-m; s=d//2; sl.append(slice(s,s+m))
+                  return x[tuple(sl)]
+              return crop(a), crop(b)
+
+          v_c, v_y = align(v_c, v_y)
+          t_c, t_y = align(t_c, t_y)
+          print('ALIGNED', v_c.shape, v_y.shape, t_c.shape, t_y.shape, flush=True)
+
+          # Interpret first dimension as samples/time when >=3D; last two as spatial.
+          # For lower-dimensional arrays, fall back to scalar features.
+          def feature_arrays(c):
+              c = np.nan_to_num(c, nan=0.0, posinf=0.0, neginf=0.0)
+              if c.ndim >= 3:
+                  # Only smooth spatial axes; keep sample/time axis independent.
+                  size = (1,) * (c.ndim - 2) + (3,3)
+                  mean3 = uniform_filter(c, size=size, mode='nearest')
+                  max3 = maximum_filter(c, size=size, mode='nearest')
+                  mean9 = uniform_filter(c, size=(1,)*(c.ndim-2)+(9,9), mode='nearest')
+                  # spatial coordinates broadcast over preceding dims
+                  h,w = c.shape[-2:]
+                  yy,xx = np.mgrid[0:h,0:w]
+                  xx = (xx/(max(w-1,1))).astype(np.float32)
+                  yy = (yy/(max(h-1,1))).astype(np.float32)
+                  shape = (1,)*(c.ndim-2)+(h,w)
+                  xx = np.broadcast_to(xx.reshape(shape), c.shape)
+                  yy = np.broadcast_to(yy.reshape(shape), c.shape)
+                  return [c, mean3, max3, mean9, xx, yy]
+              return [c]
+
+          v_feats = feature_arrays(v_c)
+          t_feats = feature_arrays(t_c)
+
+          def valid_flat(c,y,feats):
+              masks = np.isfinite(c) & np.isfinite(y)
+              idx = np.flatnonzero(masks.ravel())
+              return idx
+
+          vidx = valid_flat(v_c,v_y,v_feats)
+          tidx = valid_flat(t_c,t_y,t_feats)
+          print('VALID_PIXELS', len(vidx), len(tidx), flush=True)
+
+          # Preserve chronological/sample ordering for development split when possible.
+          # Flattening keeps C-order: earlier sample/time blocks appear first.
+          cut = int(len(vidx)*0.70)
+          fit_pool = vidx[:cut]
+          cal_pool = vidx[cut:]
+
+          def balanced_subsample(indices, y, max_n):
+              yr = y.ravel()[indices]
+              pos = indices[yr >= THRESH]
+              neg = indices[yr < THRESH]
+              n_each = min(len(pos), len(neg), max_n//2)
+              if n_each < 1000:
+                  take = RNG.choice(indices, size=min(max_n,len(indices)), replace=False)
+                  return take
+              p = RNG.choice(pos, n_each, replace=False)
+              n = RNG.choice(neg, n_each, replace=False)
+              out = np.concatenate([p,n]); RNG.shuffle(out); return out
+
+          fit_idx = balanced_subsample(fit_pool, v_y, 300_000)
+          cal_idx = balanced_subsample(cal_pool, v_y, 300_000)
+          test_idx = balanced_subsample(tidx, t_y, 1_000_000)
+
+          def X_at(feats, idx):
+              return np.column_stack([f.ravel()[idx] for f in feats]).astype(np.float32)
+
+          Xfit = X_at(v_feats, fit_idx)
+          raw_fit = v_c.ravel()[fit_idx].astype(np.float32)
+          yfit = v_y.ravel()[fit_idx].astype(np.float32)
+          residual = yfit - raw_fit
+
+          model = HistGradientBoostingRegressor(
+              loss='absolute_error',
+              learning_rate=0.07,
+              max_iter=220,
+              max_leaf_nodes=31,
+              l2_regularization=1.0,
+              random_state=20260816,
+          )
+          model.fit(Xfit, residual)
+
+          def corrected(feats,c,idx):
+              X=X_at(feats,idx)
+              raw=c.ravel()[idx].astype(np.float32)
+              return np.maximum(0.0, raw + model.predict(X).astype(np.float32))
+
+          # Tune occurrence thresholds only on held-out calibration segment.
+          cal_y = v_y.ravel()[cal_idx] >= THRESH
+          cal_raw = v_c.ravel()[cal_idx].astype(np.float32)
+          cal_corr = corrected(v_feats,v_c,cal_idx)
+
+          def tune_threshold(values, labels):
+              # Dense log-ish threshold grid plus zero.
+              qs=np.unique(np.quantile(values[np.isfinite(values)], np.linspace(0.01,0.99,120)))
+              candidates=np.unique(np.concatenate([[0.0, THRESH], qs]))
+              best=(-1,None)
+              for th in candidates:
+                  s=balanced_accuracy_score(labels, values>=th)
+                  if s>best[0]: best=(float(s),float(th))
+              return best
+
+          raw_cal_ba, raw_th = tune_threshold(cal_raw, cal_y)
+          corr_cal_ba, corr_th = tune_threshold(cal_corr, cal_y)
+
+          test_y = t_y.ravel()[test_idx] >= THRESH
+          test_raw = t_c.ravel()[test_idx].astype(np.float32)
+          test_corr = corrected(t_feats,t_c,test_idx)
+
+          raw_pred = test_raw >= raw_th
+          corr_pred = test_corr >= corr_th
+          raw_ba = balanced_accuracy_score(test_y,raw_pred)
+          corr_ba = balanced_accuracy_score(test_y,corr_pred)
+
+          def stats(pred):
+              tn,fp,fn,tp = confusion_matrix(test_y,pred,labels=[False,True]).ravel()
+              sens=tp/(tp+fn) if tp+fn else float('nan')
+              spec=tn/(tn+fp) if tn+fp else float('nan')
+              return dict(tn=int(tn),fp=int(fp),fn=int(fn),tp=int(tp),sensitivity=float(sens),specificity=float(spec))
+
+          result={
+              'benchmark':'PostRainBench Germany / COSMO-DE-EPS precipitation-only fallback',
+              'rain_definition_mm_per_h':THRESH,
+              'development_fit_pixels':int(len(fit_idx)),
+              'development_calibration_pixels':int(len(cal_idx)),
+              'blind_test_pixels':int(len(test_idx)),
+              'raw_threshold':raw_th,
+              'corrected_threshold':corr_th,
+              'raw_validation_balanced_accuracy':raw_cal_ba,
+              'corrected_validation_balanced_accuracy':corr_cal_ba,
+              'raw_test_balanced_accuracy':float(raw_ba),
+              'corrected_test_balanced_accuracy':float(corr_ba),
+              'delta_percentage_points':float((corr_ba-raw_ba)*100),
+              'raw_test':stats(raw_pred),
+              'corrected_test':stats(corr_pred),
+          }
+          print('EARTH_READER_RESULT='+json.dumps(result,sort_keys=True), flush=True)
+          PY
+          python /tmp/exp.py
