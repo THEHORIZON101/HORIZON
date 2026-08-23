@@ -128,12 +128,10 @@ The test command checks the exact population benchmark, the ReverieHacks audit, 
 | `tests/rendered-html.test.mjs` | Production-render smoke test |
 | `public/` | Brand and demonstration assets |
 | `docs/PROJECT_DOCUMENTATION.md` | Full technical and user documentation |
-| `DEMO_SCRIPT.md` | Five-minute hackathon demo script |
 
 ## Documentation
 
 - [Complete project documentation](docs/PROJECT_DOCUMENTATION.md)
-- [Hackathon demo script](DEMO_SCRIPT.md)
 - [Submission checklist](SUBMISSION_CHECKLIST.md)
 
 ## Technology
