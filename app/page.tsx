@@ -35,9 +35,9 @@ function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
 
 const demoCopy = {
   reverie: {
-    eyebrow: "REAL EXAMPLE",
-    name: "Check this hackathon’s rules",
-    description: "See whether its website and Devpost instructions agree.",
+    eyebrow: "COMPETITION-CHANGING CASE",
+    name: "Find what these rules forgot",
+    description: "See one entrant the published rules do not reject.",
     mode: "Rules for people",
     image: "/demo-audit.png",
   },
@@ -61,16 +61,20 @@ const reviewData = {
   reverie: {
     source: "ReverieHacks 2026 · Website + Devpost",
     clauses: [
+      "Website: largest virtual high school hackathon",
+      "Devpost: any student ages 13–27 may enter in teams of 1–3",
+      "No published rule says projects must begin during the event",
+      "No published rule requires entrants to disclose prior work",
       "August 24 at 11:59 p.m. local time",
       "August 24 at 12:00 a.m. CDT",
-      "Software Development requires 4 files: Code repository, Demo video, Documentation",
-      "ML Prompt Engineering requires 4 files: ML workflow, Samples, Documentation",
     ],
     variables: [
+      ["Entrant age", "Whole number", "13–27"],
+      ["Student status", "Yes or no", "Student required"],
+      ["Team size", "Whole number", "1–3 people"],
+      ["Project start", "Date", "Not constrained"],
+      ["Prior-work disclosure", "Yes or no", "Not required"],
       ["When it is submitted", "Date and time", "Aug 23–25, 2026"],
-      ["Where the entrant is", "Location", "Every timezone"],
-      ["Which track", "Choice", "6 tracks"],
-      ["Files turned in", "List", "Named files"],
     ],
   },
   benchmark: {
@@ -234,7 +238,7 @@ export default function Home() {
         finding: finding.id,
         proofStatus: finding.type,
         witness: Object.fromEntries(finding.witness),
-        expected: "Both official interpretations return the same outcome",
+        expected: finding.id === "integrity-gap" ? "Published rules prevent undisclosed pre-event work from competing as a new hackathon project" : "Both official interpretations return the same outcome",
         sourceClauses: [finding.clauseA, finding.clauseB],
       }, null, 2);
     }
@@ -381,8 +385,9 @@ export default function Home() {
           </div>
           <div className="metric-strip">
             <Metric label="Pages checked" value="2" detail="Both official" />
-            <Metric label="Rules that conflict" value="1" detail="Problem proven" />
-            <Metric label="Unclear instructions" value="2" detail="One file unnamed" />
+            <Metric label="Eligibility checks" value="4 / 4" detail="Witness passes" />
+            <Metric label="Missing safeguards" value="2" detail="Prior work uncovered" />
+            <Metric label="Other findings" value="3" detail="Deadline + file lists" />
             <Metric label="Confidence" value="Proven" detail="No guessing" />
           </div>
           <div className="findings-grid">
@@ -486,7 +491,11 @@ function FindingEvidence({ finding, showReplay, setShowReplay, download }: { fin
       <div className="clause-pair"><blockquote><small>WHAT ONE PAGE SAYS</small>{finding.clauseA}</blockquote><blockquote><small>WHAT THE OTHER SAYS</small>{finding.clauseB}</blockquote></div>
       <div className="witness-heading"><span>One example that proves the problem</span><span>Proven</span></div>
       <div className="witness-table">{finding.witness.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
-      {showReplay && <div className="replay"><span>Website says on time</span><i><Icon name="arrow-right" /></i><span>Same submission</span><i><Icon name="arrow-right" /></i><span>Devpost says late</span></div>}
+      {showReplay && (
+        <div className="replay">
+          {finding.id === "integrity-gap" ? <><span>Built in 2023</span><i><Icon name="arrow-right" /></i><span>Passes all written checks</span><i><Icon name="arrow-right" /></i><span>Can compete in 2026</span></> : finding.id === "deadline" ? <><span>Website says on time</span><i><Icon name="arrow-right" /></i><span>Same submission</span><i><Icon name="arrow-right" /></i><span>Devpost says late</span></> : <><span>Submit every named file</span><i><Icon name="arrow-right" /></i><span>Count the list</span><i><Icon name="arrow-right" /></i><span>One file is unnamed</span></>}
+        </div>
+      )}
       <div className="repair"><small>SIMPLE FIX</small><p>{finding.fix}</p></div>
       <div className="proof-actions"><button className="primary-button" onClick={() => setShowReplay(!showReplay)}>{showReplay ? "Hide explanation" : "Show how it happens"}</button><button className="quiet-button" onClick={download}>Save as a test</button></div>
     </article>
