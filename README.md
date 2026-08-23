@@ -8,7 +8,9 @@
 
 ![Archemidy project thumbnail](public/project-thumbnail.png)
 
-Archemidy is a symbolic consequence engine for policies and software specifications. It finds cases where rules disagree, returns a concrete example, counts exactly how many bounded profiles are affected, proposes the smallest candidate repair, and verifies the repaired model again.
+Archemidy began with a personal question: how can we know whether software built by AI actually does what a person asked? That led to a broader discovery. Policies, competitions, and eligibility systems have the same problem: every sentence can look reasonable by itself while the complete rule set creates an outcome nobody intended.
+
+Archemidy checks those combined consequences. It finds contradictions and uncovered cases, returns a concrete example, counts exactly how many bounded profiles are affected, proposes the smallest candidate repair, and verifies the repaired model again.
 
 The project was built for the **ReverieHacks Software Development track**.
 
@@ -40,9 +42,14 @@ These are exact results **inside the declared bounded model**. Archemidy does no
 
 Archemidy audits the ReverieHacks instructions themselves:
 
+- The website presents ReverieHacks as a high-school hackathon, while the published rules allow students ages 13–27 and contain no project-start or prior-work disclosure requirement.
+- Concrete witness: a 26-year-old graduate student entering alone with a mature project built three years earlier passes every eligibility check that is actually published.
+- This does not claim the organizers intended that outcome. It proves the published rules do not currently prevent it.
 - The website and Devpost deadline wording can classify the same Houston submission differently.
 - The Software Development track declares four required files but lists three.
 - The ML & Prompt Engineering track declares four required files but lists three.
+
+The suggested repair is to define the intended participant division and either require projects to begin during the hacking period or require prior-work disclosure and judge only work created during the event.
 
 The same engine also demonstrates software-behavior analysis by finding the shortest sequence that ships a cancelled order:
 
