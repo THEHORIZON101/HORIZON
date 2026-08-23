@@ -20,11 +20,15 @@ test("reproduces the exact population benchmark", () => {
   assert.equal(result.repair.proven, true);
 });
 
-test("finds the ReverieHacks deadline disagreement and list mismatches", () => {
+test("finds the ReverieHacks competition-integrity gap and supporting mismatches", () => {
   const result = analyzeReverie();
-  assert.equal(result.findings.length, 3);
-  assert.equal(result.findings[0].witness.at(-2)[1], "On time");
-  assert.equal(result.findings[0].witness.at(-1)[1], "Late");
+  assert.equal(result.findings.length, 4);
+  assert.equal(result.findings[0].id, "integrity-gap");
+  assert.equal(result.findings[0].witness.at(-1)[1], "No rule rejects this entry");
+  assert.match(result.findings[0].proof, /4\/4 published eligibility checks pass/);
+  assert.match(result.findings[0].proof, /0\/2 prior-work safeguards/);
+  assert.equal(result.findings[1].witness.at(-2)[1], "On time");
+  assert.equal(result.findings[1].witness.at(-1)[1], "Late");
 });
 
 test("returns a shortest software-breaking action sequence", () => {
