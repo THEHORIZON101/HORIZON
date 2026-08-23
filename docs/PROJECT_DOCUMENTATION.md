@@ -7,7 +7,9 @@
 **Live application:** <https://archemidy.danielodeyemi27.chatgpt.site>  
 **Tagline:** Calculate what your rules will do before they affect people.
 
-Archemidy is a web application that analyzes the consequences of policies and software specifications before they are applied. It identifies disagreements between rules, produces an exact counterexample, calculates the number of affected profiles in a bounded model, proposes the smallest candidate repair, and reruns the analysis to verify whether the repair removes the conflict.
+Archemidy began with a question about AI-built software: how can a person prove that the program they received actually follows what they asked for? The same hidden problem exists in policies and competitions. Rules are usually reviewed one sentence at a time, but people experience the whole system at once. A complete rule set can therefore create contradictions, uncovered cases, or unintended outcomes even when every sentence sounds reasonable alone.
+
+Archemidy is a web application that analyzes those combined consequences before the rules are applied. It identifies disagreements and uncovered cases, produces an exact counterexample, calculates the number of affected profiles in a bounded model, proposes the smallest candidate repair, and reruns the analysis to verify whether the repair removes the conflict.
 
 The central idea is simple: a policy should be tested before a real person loses a benefit, misses a deadline, or receives a different decision because two instructions disagree.
 
@@ -112,7 +114,23 @@ The minimum tested repair changes the one-person limit from $30,000 to $75,000. 
 
 The primary demonstration analyzes the event's own instructions.
 
-### Deadline conflict
+### Competition-integrity gap
+
+- The official website describes ReverieHacks as the “largest virtual high school hackathon.”
+- The official Devpost rules say any student ages 13–27 may enter in teams of one to three.
+- The published rules do not state that projects must begin during the hacking period.
+- The published rules do not require entrants to disclose prior work.
+- Exact witness: a 26-year-old graduate student, entering alone and not as a company, submits a mature software project built in 2023 with a repository, demo video, and documentation.
+- Deterministic result: the witness passes all four published eligibility checks; no published clause in the modeled rules rejects the project because of its age.
+
+This could place mature pre-existing work beside a project a 13-year-old created during the event, potentially affecting eligibility, rankings, prizes, and internships. Archemidy is **not** claiming the organizers intended to allow this. It proves that the published rules do not currently prevent it.
+
+Suggested repair:
+
+1. Define whether the event is high-school-only or open to all students ages 13–27, possibly using separate divisions.
+2. Require projects to begin during the hacking period, or require prior-work disclosure and judge only the work created during the event.
+
+### Supporting finding: deadline conflict
 
 - Website wording: August 24 at 11:59 p.m. local time.
 - Devpost wording: August 24 at 12:00 a.m. CDT.
@@ -120,12 +138,12 @@ The primary demonstration analyzes the event's own instructions.
 - Website result: on time.
 - Devpost result: late.
 
-### Required-file mismatches
+### Supporting findings: required-file mismatches
 
 - Software Development declares four required files but names three.
 - ML & Prompt Engineering declares four required files but names three.
 
-This demonstration was selected because it requires no specialist knowledge. The same person, action, and time receive two different answers.
+This demonstration was selected because it requires no specialist knowledge. One concrete entrant shows the consequence of a missing safeguard; one concrete submission shows the deadline contradiction.
 
 ## 7. System architecture
 
@@ -213,7 +231,7 @@ npm test         # complete verification
 
 ### Fixed regression tests
 
-The suite asserts the exact population universes, affected count, region count, repair, zero-conflict recheck, ReverieHacks findings, and four-action shortest software path.
+The suite asserts the exact population universes, affected count, region count, repair, zero-conflict recheck, the competition-integrity witness, supporting ReverieHacks findings, and the four-action shortest software path.
 
 ### Randomized differential testing
 
@@ -255,6 +273,8 @@ After the production build, the suite loads the generated worker, requests the p
 ## 14. References and conceptual foundations
 
 Symbolic model checking and weighted model counting inspired the compression strategy. Breadth-first search provides the shortest-path guarantee for equal-cost actions. Differential testing validates the symbolic implementation against direct enumeration. OpenAI Responses API structured outputs provide the optional transcription interface.
+
+Official demonstration sources: [ReverieHacks website](https://www.reveriehacks.org/), [ReverieHacks Devpost overview](https://reverie-hacks-2026.devpost.com/), and [published Devpost rules](https://reverie-hacks-2026.devpost.com/rules).
 
 The repository is the authoritative source for all benchmark figures. Future symbolic backends are not described as currently implemented.
 
