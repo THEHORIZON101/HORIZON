@@ -275,7 +275,7 @@ export default function Home() {
           <section className="intro-panel">
             <p className="overline">CHECK YOUR RULES BEFORE THEY GO LIVE</p>
             <h1>Calculate what your rules will do <em>before</em> they affect people.</h1>
-            <p className="intro-copy">Give Archemidy the rules. It checks every meaningful case, finds what could go wrong, and shows you one clear example that proves it.</p>
+            <p className="intro-copy">I made Archemidy after asking whether AI-built software really followed what a person requested. The same hidden problem exists in policies and competitions: each sentence can sound right while the complete rule set creates an outcome nobody noticed.</p>
 
             <div className="simple-steps" aria-label="How Archemidy works">
               <span><b>1</b> Add the rules</span>
