@@ -3,7 +3,7 @@
 ## Links
 
 - Live demo: https://scenemint.danielodeyemi27.chatgpt.site
-- Public source: pending GitHub publication
+- Public source: https://github.com/UMBR-A/GPT5.6/tree/stitch-habitat
 
 ## Project name
 
