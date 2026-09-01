@@ -1,4 +1,0 @@
-interface:
-  display_name: "Adaptive Study Director"
-  short_description: "Teach with diagnosis and mastery checks"
-  default_prompt: "Use $adaptive-study-director to teach me this topic one layer and one question at a time."
